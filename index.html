@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="description" content="FlowGo - ระบบติดตามคิวและลำดับการรับบริการอัจฉริยะ">
+  <title>FlowGo · ระบบติดตามคิวและลำดับการรับบริการ</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Kanit", "sans-serif"]
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+    body { margin: 0; min-height: 100vh; min-height: 100dvh; font-family: "Kanit", sans-serif; overflow-x: hidden; }
+    button, input, select { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    input, select { font-size: 16px; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 4px solid rgba(59, 130, 246, 0.35); outline-offset: 3px; }
+    .glass { backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    .pulse-ring { animation: pulseRing 2.5s infinite; }
+    @keyframes pulseRing {
+      0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, .35), 0 15px 40px rgba(37, 99, 235, .12); }
+      70% { box-shadow: 0 0 0 18px rgba(37, 99, 235, 0), 0 15px 40px rgba(37, 99, 235, .12); }
+      100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0), 0 15px 40px rgba(37, 99, 235, .12); }
+    }
+    .step-line { position: absolute; left: 17px; top: 40px; bottom: -20px; width: 2px; }
+    .step-item:last-child .step-line { display: none; }
+    .timer-number { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+    .safe-bottom { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+    @media (max-width: 640px) {
+      .mobile-card { border-radius: 1.25rem; }
+      .mobile-button { min-height: 48px; }
+      .step-line { left: 17px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+
+<body class="bg-slate-50 text-slate-900 transition-colors duration-300 dark:bg-slate-950 dark:text-white">
+
+  <div id="app"></div>
+
+  <script>
+    const STORAGE_KEY = "flowgo_active_session_v6";
+    const HISTORY_KEY = "flowgo_history_v6";
+    const THEME_KEY = "flowgo_theme_v6";
+    const NOTIF_KEY = "flowgo_notif_enabled_v6";
+
+    const SERVICE_TEMPLATES = {
+      hospital: {
+        id: "hospital",
+        name: "🏥 โรงพยาบาล / ศูนย์บริการสาธารณสุข",
+        steps: ["กดบัตรคิว", "ซักประวัติ", "พบแพทย์", "รับยา"]
+      },
+      government: {
+        id: "government",
+        name: "🏛️ หน่วยงานราชการ / สำนักงานเขต",
+        steps: [
+          "เดินทางมาถึงสถานที่",
+          "กดบัตรคิว",
+          "ยื่นเอกสารเเละตรวจสอบความถูกต้อง",
+          "เจ้าหน้าที่ดำเนินการ / คีย์ข้อมูล",
+          "ชำระค่าธรรมเนียม (ถ้ามี)",
+          "รอพิมพ์เอกสาร / บัตร / ใบอนุญาต",
+          "ตรวจสอบความถูกต้องของเอกสาร",
+          "เสร็จสิ้นการรับบริการ"
+        ]
+      },
+      bank: {
+        id: "bank",
+        name: "🏦 ธนาคาร / สถาบันการเงิน",
+        steps: [
+          "เดินทางมาถึงสาขา",
+          "กดบัตรคิว",
+          "รอเรียกคิวหน้าเคาน์เตอร์",
+          "เสร็จสิ้นการทำธุรกรรม"
+        ]
+      },
+      general: {
+        id: "general",
+        name: "⏱️ รับบริการทั่วไป",
+        steps: [
+          "เดินทางมาถึง",
+          "ลงทะเบียน",
+          "รอคัดกรอง / รอเรียกคิว",
+          "รับบริการ / ดำเนินการ",
+          "รอชำระเงิน",
+          "รับสิ่งของหรือเอกสาร",
+          "เสร็จสิ้นการรับบริการ"
+        ]
+      }
+    };
+
+    function getCountdownDurationForStep(title) {
+      const t = title.toLowerCase();
+      if (t.includes("ซักประวัติ") || t.includes("ความดัน") || t.includes("คัดกรอง")) return 3600;
+      if (t.includes("พบแพทย์") || t.includes("หมอ") || t.includes("ตรวจเพิ่มเติม")) return 5400;
+      if (t.includes("รับยา") || t.includes("จ่ายยา")) return 7200;
+      return 3600;
+    }
+
+    function createStepsFromList(stepNames) {
+      return stepNames.map((title, index) => ({
+        id: `step-${Date.now()}-${index + 1}`,
+        stepNumber: index + 1,
+        title: title || `ขั้นตอนที่ ${index + 1}`,
+        status: "pending",
+        startedAt: null,
+        completedAt: null,
+        durationSeconds: 0,
+        accumulatedSeconds: 0,
+        countdownLimit: getCountdownDurationForStep(title || ""),
+        notified30Min: false
+      }));
+    }
+
+    function createDefaultSteps(templateKey = "general") {
+      const template = SERVICE_TEMPLATES[templateKey] || SERVICE_TEMPLATES.general;
+      return createStepsFromList(template.steps);
+    }
+
+    function renumberSteps() {
+      state.steps.forEach((step, idx) => {
+        step.stepNumber = idx + 1;
+      });
+    }
+
+    const state = {
+      page: "home",
+      serviceType: "hospital",
+      sessionName: "",
+      started: false,
+      completed: false,
+      startTime: null,
+      endTime: null,
+      elapsedSeconds: 0,
+      currentStep: 1,
+      currentTime: new Date(),
+      darkMode: false,
+      notificationsEnabled: true,
+      steps: createDefaultSteps("hospital")
+    };
+
+    // สร้างเสียงเเจ้งเตือนด้วย Web Audio API
+    function playNotificationSound() {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(880, now); // โน้ต A5
+        osc.frequency.setValueAtTime(1174.66, now + 0.15); // โน้ต D6
+
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.3, now + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now);
+        osc.stop(now + 0.5);
+      } catch (e) {
+        console.error("เกิดข้อผิดพลาดในการเล่นเสียง", e);
+      }
+    }
+
+    // สลับเปิด/ปิดแจ้งเตือนทันที ไร้ความหน่วง ไม่มีการเรียก Pop-up
+    function toggleNotifications() {
+      state.notificationsEnabled = !state.notificationsEnabled;
+      saveNotifSetting();
+      render();
+    }
+
+    function saveNotifSetting() {
+      try {
+        localStorage.setItem(NOTIF_KEY, state.notificationsEnabled ? "true" : "false");
+      } catch (e) {}
+    }
+
+    function loadNotifSetting() {
+      try {
+        const val = localStorage.getItem(NOTIF_KEY);
+        if (val !== null) {
+          state.notificationsEnabled = val === "true";
+        }
+      } catch (e) {}
+    }
+
+    // ส่งการแจ้งเตือนทันทีโดยไม่ต้องเช็คและขอสิทธิ์แบบ Blocking
+    function sendSystemNotification(title, body) {
+      if (!state.notificationsEnabled) return;
+      
+      // เล่นเสียงเตือน
+      playNotificationSound();
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        try {
+          new Notification(title, {
+            body: body,
+            icon: "https://cdn-icons-png.flaticon.com/512/3602/3602145.png"
+          });
+        } catch (e) {
+          console.error("เกิดข้อผิดพลาดในการส่งแจ้งเตือน", e);
+        }
+      }
+    }
+
+    function toDate(value) {
+      if (!value) return null;
+      const date = value instanceof Date ? value : new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    function formatDate(date) {
+      const safeDate = toDate(date);
+      if (!safeDate) return "-";
+      return new Intl.DateTimeFormat("th-TH", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric"
+      }).format(safeDate);
+    }
+
+    function formatDateTime(date) {
+      const safeDate = toDate(date);
+      if (!safeDate) return "-";
+      return new Intl.DateTimeFormat("th-TH", {
+        dateStyle: "short",
+        timeStyle: "medium"
+      }).format(safeDate);
+    }
+
+    function formatTime(date) {
+      const safeDate = toDate(date);
+      if (!safeDate) return "-";
+      return new Intl.DateTimeFormat("th-TH", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).format(safeDate);
+    }
+
+    function formatElapsed(seconds) {
+      const isNegative = seconds < 0;
+      const safeSeconds = Math.abs(Math.floor(Number(seconds) || 0));
+      const hours = Math.floor(safeSeconds / 3600);
+      const minutes = Math.floor((safeSeconds % 3600) / 60);
+      const secs = safeSeconds % 60;
+
+      const formatted = [
+        String(hours).padStart(2, "0"),
+        String(minutes).padStart(2, "0"),
+        String(secs).padStart(2, "0")
+      ].join(":");
+
+      return isNegative ? `-${formatted}` : formatted;
+    }
+
+    function formatDurationText(seconds) {
+      const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+      const hours = Math.floor(safeSeconds / 3600);
+      const minutes = Math.floor((safeSeconds % 3600) / 60);
+      const secs = safeSeconds % 60;
+      const parts = [];
+
+      if (hours > 0) parts.push(`${hours} ชม.`);
+      if (minutes > 0 || hours > 0) parts.push(`${minutes} นาที`);
+      parts.push(`${secs} วิ`);
+
+      return parts.join(" ");
+    }
+
+    function escapeHtml(value) {
+      const div = document.createElement("div");
+      div.textContent = value ?? "";
+      return div.innerHTML;
+    }
+
+    function getCurrentStep() {
+      return state.steps[state.currentStep - 1];
+    }
+
+    function calculateTotalElapsed() {
+      if (!state.startTime) return 0;
+      const start = toDate(state.startTime);
+      if (!start) return 0;
+
+      const end = state.completed ? toDate(state.endTime) : new Date();
+      if (!end) return 0;
+
+      let seconds = Math.floor((end.getTime() - start.getTime()) / 1000);
+      return Math.max(0, seconds);
+    }
+
+    function calculateCurrentStepElapsed() {
+      const step = getCurrentStep();
+      if (!step) return 0;
+
+      if (step.status !== "current" || !step.startedAt) {
+        return Number(step.accumulatedSeconds) || 0;
+      }
+
+      const started = toDate(step.startedAt);
+      if (!started) return 0;
+
+      const end = new Date();
+      const runningSeconds = Math.floor((end.getTime() - started.getTime()) / 1000);
+      return Math.max(0, runningSeconds + (Number(step.accumulatedSeconds) || 0));
+    }
+
+    function calculateCurrentStepRemaining() {
+      const step = getCurrentStep();
+      if (!step) return 0;
+      const elapsed = calculateCurrentStepElapsed();
+      const limit = step.countdownLimit || 3600;
+      return limit - elapsed;
+    }
+
+    function updateTimers() {
+      if (!state.started) return;
+      state.elapsedSeconds = calculateTotalElapsed();
+    }
+
+    function saveState() {
+      try {
+        const data = {
+          ...state,
+          startTime: state.startTime ? new Date(state.startTime).toISOString() : null,
+          endTime: state.endTime ? new Date(state.endTime).toISOString() : null,
+          currentTime: new Date().toISOString(),
+          steps: state.steps.map(step => ({
+            ...step,
+            startedAt: step.startedAt ? new Date(step.startedAt).toISOString() : null,
+            completedAt: step.completedAt ? new Date(step.completedAt).toISOString() : null
+          }))
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      } catch (error) {
+        console.error("ไม่สามารถบันทึกข้อมูล", error);
+      }
+    }
+
+    function loadState() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (!saved) return;
+        const data = JSON.parse(saved);
+        if (!data || typeof data !== "object") return;
+
+        Object.assign(state, data);
+        state.startTime = toDate(data.startTime);
+        state.endTime = toDate(data.endTime);
+        state.currentTime = new Date();
+        state.serviceType = data.serviceType || "hospital";
+
+        if (!Array.isArray(data.steps) || data.steps.length === 0) {
+          state.steps = createDefaultSteps(state.serviceType);
+        } else {
+          state.steps = data.steps.map((step) => ({
+            ...step,
+            startedAt: toDate(step.startedAt),
+            completedAt: toDate(step.completedAt),
+            countdownLimit: step.countdownLimit || getCountdownDurationForStep(step.title),
+            notified30Min: step.notified30Min || false
+          }));
+        }
+
+        state.page = "home";
+
+        if (state.started) {
+          updateTimers();
+        }
+      } catch (error) {
+        console.error("ไม่สามารถโหลดข้อมูล", error);
+        resetStateOnly();
+      }
+    }
+
+    function saveTheme() {
+      try {
+        localStorage.setItem(THEME_KEY, state.darkMode ? "dark" : "light");
+      } catch (error) {}
+    }
+
+    function loadTheme() {
+      try {
+        const theme = localStorage.getItem(THEME_KEY);
+        if (theme === "dark") {
+          state.darkMode = true;
+          document.documentElement.classList.add("dark");
+        }
+      } catch (error) {}
+    }
+
+    function onServiceTypeChange() {
+      const select = document.getElementById("serviceTypeSelect");
+      if (!select) return;
+      state.serviceType = select.value;
+    }
+
+    function startClock() {
+      if (state.started && !state.completed) {
+        state.page = "workflow";
+        render();
+        return;
+      }
+
+      const input = document.getElementById("sessionName");
+      const serviceTypeSelect = document.getElementById("serviceTypeSelect");
+      
+      const selectedType = serviceTypeSelect?.value || "hospital";
+      const template = SERVICE_TEMPLATES[selectedType] || SERVICE_TEMPLATES.hospital;
+      
+      const defaultName = `การรับบริการ${template.name.replace(/^[^\s]+\s*/, '')}`;
+      const name = input?.value.trim() || defaultName;
+      const now = new Date();
+
+      state.serviceType = selectedType;
+      state.sessionName = name;
+      state.started = true;
+      state.completed = false;
+      state.startTime = now;
+      state.endTime = null;
+      state.elapsedSeconds = 0;
+      state.currentStep = 1;
+      
+      state.steps = createDefaultSteps(selectedType);
+
+      state.steps[0].status = "current";
+      state.steps[0].startedAt = now;
+      state.page = "workflow";
+
+      saveState();
+      render();
+    }
+
+    function skipStep() {
+      if (!state.started || state.completed) return;
+
+      const now = new Date();
+      const current = getCurrentStep();
+      if (!current) return;
+
+      current.durationSeconds = 0;
+      current.accumulatedSeconds = 0;
+      current.completedAt = now;
+      current.startedAt = null;
+      current.status = "skipped";
+
+      if (state.currentStep >= state.steps.length) {
+        state.completed = true;
+        state.endTime = now;
+        state.elapsedSeconds = calculateTotalElapsed();
+        state.page = "summary";
+
+        saveState();
+        addToHistory();
+        render();
+        return;
+      }
+
+      state.currentStep++;
+      const next = getCurrentStep();
+      next.status = "current";
+      next.startedAt = now;
+      next.completedAt = null;
+      next.accumulatedSeconds = 0;
+      next.durationSeconds = 0;
+
+      saveState();
+      render();
+    }
+
+    function nextStep() {
+      if (!state.started || state.completed) return;
+
+      const now = new Date();
+      const current = getCurrentStep();
+      if (!current) return;
+
+      const elapsed = calculateCurrentStepElapsed();
+      current.durationSeconds = elapsed;
+      current.accumulatedSeconds = elapsed;
+      current.completedAt = now;
+      current.startedAt = null;
+      current.status = "completed";
+
+      if (state.currentStep >= state.steps.length) {
+        state.completed = true;
+        state.endTime = now;
+        state.elapsedSeconds = calculateTotalElapsed();
+        state.page = "summary";
+
+        saveState();
+        addToHistory();
+        render();
+        return;
+      }
+
+      state.currentStep++;
+      const next = getCurrentStep();
+      next.status = "current";
+      next.startedAt = now;
+      next.completedAt = null;
+      next.accumulatedSeconds = 0;
+      next.durationSeconds = 0;
+
+      saveState();
+      render();
+    }
+
+    function insertStepAction() {
+      const stepTitle = prompt("กรุณาระบุชื่อขั้นตอนที่ต้องการเพิ่มแทรกหลังขั้นตอนปัจจุบัน:");
+      if (!stepTitle || !stepTitle.trim()) return;
+
+      const targetIndex = state.currentStep - 1;
+
+      const newStep = {
+        id: `step-inserted-${Date.now()}`,
+        stepNumber: 0,
+        title: stepTitle.trim(),
+        status: "pending",
+        startedAt: null,
+        completedAt: null,
+        durationSeconds: 0,
+        accumulatedSeconds: 0,
+        countdownLimit: getCountdownDurationForStep(stepTitle.trim()),
+        notified30Min: false
+      };
+
+      state.steps.splice(targetIndex + 1, 0, newStep);
+      renumberSteps();
+
+      saveState();
+      render();
+    }
+
+    function resetStateOnly() {
+      state.page = "home";
+      state.sessionName = "";
+      state.serviceType = "hospital";
+      state.started = false;
+      state.completed = false;
+      state.startTime = null;
+      state.endTime = null;
+      state.elapsedSeconds = 0;
+      state.currentStep = 1;
+      state.steps = createDefaultSteps("hospital");
+    }
+
+    function resetApp() {
+      if (!confirm("ต้องการเริ่มรายการใหม่หรือไม่?\nข้อมูลรายการปัจจุบันจะถูกลบ")) return;
+
+      resetStateOnly();
+      localStorage.removeItem(STORAGE_KEY);
+      render();
+    }
+
+    function toggleDarkMode() {
+      state.darkMode = !state.darkMode;
+      document.documentElement.classList.toggle("dark", state.darkMode);
+      saveTheme();
+      render();
+    }
+
+    function getHistory() {
+      try {
+        const data = localStorage.getItem(HISTORY_KEY);
+        if (!data) return [];
+        const history = JSON.parse(data);
+        return Array.isArray(history) ? history : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function saveHistory(history) {
+      try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    function addToHistory() {
+      if (!state.completed) return;
+      const history = getHistory();
+      const templateName = SERVICE_TEMPLATES[state.serviceType]?.name || "";
+      const record = {
+        id: Date.now().toString(),
+        name: state.sessionName || "รายการรับบริการ",
+        serviceType: state.serviceType,
+        serviceTypeName: templateName,
+        startTime: state.startTime ? new Date(state.startTime).toISOString() : null,
+        endTime: state.endTime ? new Date(state.endTime).toISOString() : null,
+        totalSeconds: state.elapsedSeconds,
+        steps: state.steps.map(step => ({
+          id: step.id,
+          stepNumber: step.stepNumber,
+          title: step.title,
+          durationSeconds: step.durationSeconds,
+          status: step.status
+        }))
+      };
+
+      history.unshift(record);
+      saveHistory(history.slice(0, 100));
+    }
+
+    function deleteHistory(id) {
+      if (!confirm("ต้องการลบรายการนี้หรือไม่?")) return;
+      const history = getHistory().filter(item => item.id !== id);
+      saveHistory(history);
+      render();
+    }
+
+    function clearHistory() {
+      if (!confirm("ต้องการลบประวัติทั้งหมดหรือไม่?")) return;
+      localStorage.removeItem(HISTORY_KEY);
+      render();
+    }
+
+    function exportJSON() {
+      const history = getHistory();
+      if (!history.length) {
+        alert("ยังไม่มีข้อมูลสำหรับส่งออก");
+        return;
+      }
+      downloadFile(JSON.stringify(history, null, 2), "flowgo-history.json", "application/json");
+    }
+
+    function exportCSV() {
+      const history = getHistory();
+      if (!history.length) {
+        alert("ยังไม่มีข้อมูลสำหรับส่งออก");
+        return;
+      }
+      const rows = [["ชื่อรายการ", "ประเภทสถานที่", "เวลาเริ่ม", "เวลาสิ้นสุด", "เวลารวม (วินาที)"]];
+      history.forEach(item => {
+        rows.push([item.name, item.serviceTypeName || item.serviceType, item.startTime, item.endTime, item.totalSeconds]);
+      });
+
+      const csv = rows
+        .map(row => row.map(value => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","))
+        .join("\n");
+
+      downloadFile("\uFEFF" + csv, "flowgo-history.csv", "text/csv;charset=utf-8");
+    }
+
+    function downloadFile(content, fileName, type) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    }
+
+    function goHome() {
+      if (state.started && !state.completed && state.page !== "home") {
+        if (!confirm("รายการกำลังดำเนินการอยู่ ต้องการกลับหน้าหลักหรือไม่?")) return;
+      }
+      state.page = "home";
+      render();
+    }
+
+    function goWorkflow() {
+      if (!state.started) return;
+      state.page = "workflow";
+      render();
+    }
+
+    function goHistory() {
+      state.page = "history";
+      render();
+    }
+
+    function renderHeader() {
+      const notifActive = state.notificationsEnabled;
+      return `
+        <header class="sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-950/90 glass">
+          <div class="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-3 py-2.5 sm:px-6">
+            <button type="button" onclick="goHome()" class="group flex min-w-0 items-center gap-2.5 text-left transition hover:opacity-90 sm:gap-3">
+              <div class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr font-bold from-blue-600 via-indigo-600 to-cyan-500 text-lg text-white shadow-lg shadow-blue-500/25 ring-2 ring-blue-400/20 transition-transform group-hover:scale-105 sm:h-11 sm:w-11">
+                ⏱️
+              </div>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5">
+                  <span class="bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-lg font-black tracking-tight text-transparent dark:from-blue-400 dark:via-indigo-300 dark:to-cyan-400 sm:text-xl">
+                    FlowGo
+                  </span>
+                  <span class="rounded-full bg-blue-100 px-1.5 py-0.2 text-[10px] font-bold text-blue-700 dark:bg-blue-900/60 dark:text-blue-300">
+                    PRO
+                  </span>
+                </div>
+                <p class="hidden truncate text-xs font-medium text-slate-500 dark:text-slate-400 xs:block sm:block">
+                  ติดตามคิวทันใจ ไม่ต้องนั่งคอย
+                </p>
+              </div>
+            </button>
+
+            <nav class="flex shrink-0 items-center gap-2" aria-label="เมนูหลัก">
+              <button type="button" onclick="toggleNotifications()" class="flex min-h-[38px] items-center justify-center rounded-xl border ${
+                notifActive 
+                  ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-300 hover:bg-blue-100" 
+                  : "border-slate-200 bg-slate-100 text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 hover:bg-slate-200"
+              } px-2.5 text-xs font-medium transition sm:px-3 sm:text-sm" title="คลิกเพื่อสลับการเปิด/ปิดแจ้งเตือน">
+                <span>${notifActive ? "🔔" : "🔕"}</span> 
+                <span class="hidden sm:inline ml-1">${notifActive ? "เปิดแจ้งเตือน" : "ปิดแจ้งเตือน"}</span>
+              </button>
+
+              <button type="button" onclick="goHistory()" class="flex min-h-[38px] items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 sm:text-sm">
+                <span class="sm:hidden">📋</span>
+                <span class="hidden sm:inline">📋 ประวัติ</span>
+              </button>
+
+              <button type="button" onclick="toggleDarkMode()" class="flex min-h-[38px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 sm:text-sm" aria-label="เปลี่ยนโหมดสี">
+                <span>${state.darkMode ? "☀️" : "🌙"}</span>
+                <span class="hidden md:inline">${state.darkMode ? "โหมดสว่าง" : "โหมดมืด"}</span>
+              </button>
+            </nav>
+          </div>
+        </header>
+      `;
+    }
+
+    function renderCurrentClock() {
+      return `
+        <section class="mobile-card rounded-2xl border border-slate-200 bg-white p-4 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+          <p class="text-xs font-medium text-slate-500 dark:text-slate-400 sm:text-sm">เวลาปัจจุบัน</p>
+          <p id="live-clock-time" class="timer-number mt-1 text-2xl font-semibold text-slate-900 dark:text-white sm:mt-2 sm:text-5xl">
+            ${formatTime(state.currentTime)}
+          </p>
+          <p id="live-clock-date" class="mt-1 text-xs text-slate-600 dark:text-slate-300 sm:mt-2 sm:text-base">
+            ${formatDate(state.currentTime)}
+          </p>
+        </section>
+      `;
+    }
+
+    function renderHomePage() {
+      const hasActiveSession = state.started && !state.completed;
+
+      return `
+        <main class="mx-auto w-full max-w-3xl px-3 py-4 sm:px-6 sm:py-10">
+          <section class="mb-6 text-center sm:mb-10">
+            <div class="inline-flex items-center gap-2 rounded-full border border-blue-200/80 bg-blue-50/80 px-3.5 py-1 text-xs font-semibold text-blue-700 backdrop-blur dark:border-blue-800/60 dark:bg-blue-950/40 dark:text-blue-300 sm:px-4 sm:py-1.5 sm:text-sm">
+              <span class="inline-block h-2 w-2 animate-ping rounded-full bg-blue-500"></span>
+              ⚡ Smart Service Queue Tracker
+            </div>
+
+            <div class="relative mx-auto mt-4 mb-3 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 text-3xl shadow-xl shadow-blue-500/25 ring-4 ring-white dark:ring-slate-900 sm:h-20 sm:w-20 sm:text-4xl">
+              ⏱️
+            </div>
+
+            <h1 class="text-2xl font-black tracking-tight text-slate-900 dark:text-white sm:text-4xl md:text-5xl">
+              <span class="bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-transparent dark:from-blue-400 dark:via-indigo-300 dark:to-cyan-400">FlowGo</span>
+              <span class="block text-xl font-bold text-slate-800 dark:text-slate-200 sm:mt-1 sm:text-3xl">
+                ติดตามคิว ทันใจ ไม่ต้องนั่งคอย
+              </span>
+            </h1>
+
+            <p class="mx-auto mt-2 max-w-lg text-xs leading-relaxed text-slate-600 dark:text-slate-300 sm:mt-3 sm:text-base">
+              เปลี่ยนเวลาการรอคอยให้อยู่ในมือคุณ บันทึก ลำดับ และจับเวลาแต่ละขั้นตอนบริการได้อย่างแม่นยำ ไร้กังวล
+            </p>
+          </section>
+
+          <div class="space-y-3 sm:space-y-6">
+            ${renderCurrentClock()}
+
+            <section class="mobile-card rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+              ${
+                hasActiveSession
+                  ? `
+                    <div class="rounded-xl border border-blue-200 bg-blue-50 p-3.5 dark:border-blue-900 dark:bg-blue-950/40 sm:p-5">
+                      <p class="text-xs font-medium text-blue-700 dark:text-blue-300 sm:text-sm">มีรายการที่กำลังดำเนินการ</p>
+                      <h2 class="mt-1 break-words text-base font-semibold text-blue-900 dark:text-blue-100 sm:text-xl">
+                        ${escapeHtml(state.sessionName)}
+                      </h2>
+                      <p class="mt-1 text-xs text-blue-700 dark:text-blue-300 sm:text-sm">
+                        รูปแบบ: ${SERVICE_TEMPLATES[state.serviceType]?.name || "โรงพยาบาล / ศูนย์บริการสาธารณสุข"}
+                      </p>
+                      <p class="mt-0.5 text-xs text-blue-700 dark:text-blue-300 sm:text-sm">
+                        ขั้นตอนที่ ${state.currentStep} จาก ${state.steps.length}
+                      </p>
+                      <button type="button" onclick="goWorkflow()" class="mobile-button mt-3 w-full rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:from-blue-700 hover:to-indigo-700 sm:mt-4 sm:rounded-2xl sm:py-3 sm:text-base">
+                        ▶ ดำเนินการต่อ
+                      </button>
+                    </div>
+                  `
+                  : `
+                    <div class="space-y-4">
+                      <div>
+                        <label for="serviceTypeSelect" class="block text-xs font-medium text-slate-700 dark:text-slate-200 sm:text-sm">
+                          เลือกประเภทสถานที่ / ประเภทบริการ
+                        </label>
+                        <select id="serviceTypeSelect" onchange="onServiceTypeChange()" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white sm:mt-2 sm:rounded-2xl sm:px-4 sm:py-3">
+                          ${Object.values(SERVICE_TEMPLATES).map(tmpl => `
+                            <option value="${tmpl.id}" ${state.serviceType === tmpl.id ? 'selected' : ''}>${tmpl.name}</option>
+                          `).join('')}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label for="sessionName" class="block text-xs font-medium text-slate-700 dark:text-slate-200 sm:text-sm">
+                          ชื่อรายการ (ไม่ระบุได้)
+                        </label>
+                        <input id="sessionName" type="text" maxlength="100" placeholder="เช่น ถอดฟันคุด, นัดตรวจสุขภาพประจำปี, ขูดหินปูน" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white sm:mt-2 sm:rounded-2xl sm:px-4 sm:py-3">
+                      </div>
+
+                      <button type="button" onclick="startClock()" class="pulse-ring mobile-button flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:opacity-95 active:scale-[0.98] sm:rounded-2xl sm:py-4 sm:text-lg">
+                        <span class="text-xl sm:text-2xl">🕐</span> เริ่มบันทึกเวลา
+                      </button>
+                    </div>
+                  `
+              }
+            </section>
+
+            <section class="rounded-2xl border border-blue-100 bg-blue-50 p-3.5 dark:border-blue-900 dark:bg-blue-950/40 sm:p-5">
+              <div class="flex gap-3">
+                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-xs text-white sm:h-10 sm:w-10 sm:rounded-xl sm:text-base">
+                  ℹ️
+                </div>
+                <div class="min-w-0">
+                  <h2 class="text-xs font-semibold text-blue-900 dark:text-blue-100 sm:text-base">เกี่ยวกับระบบ</h2>
+                  <p class="mt-0.5 text-xs leading-relaxed text-blue-800 dark:text-blue-200 sm:mt-1 sm:text-sm">
+                    เลือกสถานที่รับบริการเพื่อให้ระบบเปลี่ยนลำดับขั้นตอนให้ตรงกับการใช้งานจริง ข้อมูลจะถูกบันทึกใน Local Storage ของอุปกรณ์แต่ละเครื่อง ไม่ปะปนกัน
+                  </p>
+                </div>
+              </div>
+            </section>
+          </div>
+        </main>
+      `;
+    }
+
+    function renderProgressHeader() {
+      const completedCount = state.steps.filter(step => step.status === "completed" || step.status === "skipped").length;
+      const progress = state.completed ? 100 : (completedCount / state.steps.length) * 100;
+      const templateName = SERVICE_TEMPLATES[state.serviceType]?.name || "รับบริการทั่วไป";
+
+      return `
+        <section class="mobile-card rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+          <div class="flex flex-row items-center justify-between gap-2">
+            <div class="min-w-0 flex-1">
+              <span class="inline-block rounded-md bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/60 dark:text-blue-200 sm:text-xs">
+                ${templateName}
+              </span>
+              <p class="mt-1 truncate text-xs text-slate-500 dark:text-slate-400 sm:text-sm">
+                ${escapeHtml(state.sessionName)}
+              </p>
+              <h2 class="mt-0.5 truncate text-base font-semibold text-slate-900 dark:text-white sm:text-2xl">
+                ${state.completed ? "เสร็จสิ้นทุกขั้นตอน" : `ขั้นตอนที่ ${state.currentStep} /${state.steps.length}`}
+              </h2>
+            </div>
+
+            <div class="shrink-0 rounded-xl px-2.5 py-1.5 text-right sm:px-4 sm:py-3 ${
+              state.completed ? "bg-green-50 dark:bg-green-950/40" : "bg-blue-50 dark:bg-blue-950/40"
+            }">
+              <p class="text-[10px] font-medium sm:text-xs ${
+                state.completed ? "text-green-700 dark:text-green-300" : "text-blue-700 dark:text-blue-300"
+              }">สถานะ</p>
+              <p class="text-xs font-semibold sm:text-base ${
+                state.completed ? "text-green-900 dark:text-green-100" : "text-blue-900 dark:text-blue-100"
+              }">
+                ${state.completed ? "เสร็จสิ้น 🎉" : "กำลังดำเนินการ"}
+              </p>
+            </div>
+          </div>
+
+          <div class="mt-3 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800 sm:mt-5 sm:h-2.5" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
+            <div class="h-full rounded-full ${state.completed ? "bg-green-600" : "bg-blue-600"} transition-all duration-500" style="width:${progress}%"></div>
+          </div>
+          <p class="mt-1.5 text-right text-[11px] text-slate-500 dark:text-slate-400 sm:mt-2 sm:text-xs">
+            เสร็จสิ้นแล้ว ${completedCount} จาก ${state.steps.length} ขั้นตอน
+          </p>
+        </section>
+      `;
+    }
+
+    function renderTimerCards() {
+      const currentStepTime = calculateCurrentStepElapsed();
+      const remainingTime = calculateCurrentStepRemaining();
+
+      return `
+        <section class="grid grid-cols-3 gap-1.5 sm:gap-4">
+          <div class="rounded-xl border border-slate-200 bg-white p-2 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:rounded-3xl sm:p-5">
+            <p class="text-[10px] font-medium text-slate-500 dark:text-slate-400 sm:text-sm truncate">เวลารวม</p>
+            <p id="total-elapsed-timer" class="timer-number mt-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400 xs:text-sm sm:mt-2 sm:text-2xl">
+              ${formatElapsed(state.elapsedSeconds)}
+            </p>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 bg-white p-2 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:rounded-3xl sm:p-5">
+            <p class="text-[10px] font-medium text-slate-500 dark:text-slate-400 sm:text-sm truncate">ขั้นตอนปัจจุบัน</p>
+            <p id="current-step-timer" class="timer-number mt-0.5 text-xs font-semibold text-purple-600 dark:text-purple-400 xs:text-sm sm:mt-2 sm:text-2xl">
+              ${formatElapsed(currentStepTime)}
+            </p>
+          </div>
+
+          <div class="rounded-xl border border-amber-200 bg-amber-50/50 p-2 text-center shadow-sm dark:border-amber-900/50 dark:bg-amber-950/20 sm:rounded-3xl sm:p-5">
+            <p class="text-[10px] font-medium text-amber-700 dark:text-amber-400 sm:text-sm truncate">⏳ นับถอยหลัง</p>
+            <p id="countdown-timer" class="timer-number mt-0.5 text-xs font-semibold ${remainingTime < 0 ? 'text-red-600 dark:text-red-400 animate-pulse' : 'text-amber-600 dark:text-amber-400'} xs:text-sm sm:mt-2 sm:text-2xl">
+              ${formatElapsed(remainingTime)}
+            </p>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderActionButtons() {
+      if (state.completed) {
+        return `
+          <section class="grid grid-cols-2 gap-2 sm:gap-3">
+            <button type="button" onclick="state.page='summary';render()" class="mobile-button rounded-xl border border-slate-300 bg-white px-4 py-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 sm:rounded-2xl sm:text-base">
+              📊 ดูสรุปผล
+            </button>
+            <button type="button" onclick="resetApp()" class="mobile-button rounded-xl bg-blue-600 px-4 py-3 text-xs font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 sm:rounded-2xl sm:text-base">
+              🔄 เริ่มรายการใหม่
+            </button>
+          </section>
+        `;
+      }
+
+      return `
+        <section class="mobile-card rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+          <div class="mb-3 flex items-center justify-between gap-2">
+            <div class="min-w-0 flex-1">
+              <p class="text-[10px] text-slate-500 dark:text-slate-400 sm:text-xs">ขั้นตอนปัจจุบัน</p>
+              <p class="mt-0.5 truncate text-sm font-semibold text-slate-900 dark:text-white sm:text-lg">
+                ${state.currentStep}. ${escapeHtml(getCurrentStep()?.title)}
+              </p>
+            </div>
+            <span class="shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-medium sm:text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-200">
+              ● กำลังจับเวลา
+            </span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" onclick="skipStep()" class="mobile-button rounded-xl border border-amber-300 bg-amber-50 px-2 py-3 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200 sm:rounded-2xl sm:text-base">
+              ⏭️ ข้ามขั้นตอน
+            </button>
+
+            <button type="button" onclick="insertStepAction()" class="mobile-button rounded-xl border border-blue-300 bg-blue-50 px-2 py-3 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200 sm:rounded-2xl sm:text-base">
+              ➕ แทรกขั้นตอน
+            </button>
+
+            <button type="button" onclick="nextStep()" class="mobile-button rounded-xl bg-blue-600 px-2 py-3 text-xs font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 sm:rounded-2xl sm:text-base">
+              ${state.currentStep === state.steps.length ? "✓ เสร็จสิ้นทั้งหมด" : "✓ เสร็จขั้นตอนนี้ →"}
+            </button>
+          </div>
+
+          <div class="mt-2 flex justify-end">
+            <button type="button" onclick="resetApp()" class="mobile-button rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-600 transition hover:bg-red-100 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300 sm:rounded-2xl sm:text-sm">
+              🗑 เริ่มรายการใหม่
+            </button>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderStepItem(step, index) {
+      const isCurrent = step.status === "current";
+      const isCompleted = step.status === "completed";
+      const isSkipped = step.status === "skipped";
+      const isPending = step.status === "pending";
+
+      return `
+        <li class="step-item relative flex gap-2.5 pb-3.5 sm:gap-4 sm:pb-5">
+          <div class="step-line ${isCompleted ? "bg-green-300 dark:bg-green-800" : isSkipped ? "bg-amber-300 dark:bg-amber-800" : "bg-slate-200 dark:bg-slate-700"}"></div>
+          <div class="relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold sm:h-10 sm:w-10 sm:text-sm ${
+            isCurrent ? "border-blue-600 bg-blue-600 text-white shadow-md" : isCompleted ? "border-green-600 bg-green-600 text-white" : isSkipped ? "border-amber-500 bg-amber-500 text-white" : "border-slate-300 bg-white text-slate-400 dark:border-slate-700 dark:bg-slate-900"
+          }">
+            ${isCompleted ? "✓" : isSkipped ? "⏭" : step.stepNumber}
+          </div>
+
+          <div class="min-w-0 flex-1 rounded-xl border p-2.5 ${
+            isCurrent ? "border-blue-300 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/40" : isCompleted ? "border-green-200 bg-green-50/60 dark:border-green-900 dark:bg-green-950/20" : isSkipped ? "border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20" : "border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40"
+          } sm:rounded-2xl sm:p-3.5">
+            <div class="flex flex-row items-center justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <p class="text-[10px] font-medium ${isCurrent ? "text-blue-600 dark:text-blue-400" : isCompleted ? "text-green-600 dark:text-green-400" : isSkipped ? "text-amber-600 dark:text-amber-400" : "text-slate-400"}">
+                  ขั้นตอนที่ ${step.stepNumber}
+                </p>
+                <h3 class="truncate text-xs font-semibold sm:text-sm ${isPending ? "text-slate-400 dark:text-slate-500" : "text-slate-900 dark:text-white"}">
+                  ${escapeHtml(step.title)}
+                </h3>
+              </div>
+
+              <div class="flex shrink-0 items-center gap-1.5">
+                ${
+                  isCompleted
+                    ? `<span class="rounded-md bg-white px-2 py-0.5 font-mono text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300 sm:text-xs">⏱️ ${formatDurationText(step.durationSeconds)}</span>`
+                    : isSkipped
+                      ? `<span class="rounded-md bg-amber-100 px-2 py-0.5 font-mono text-[10px] text-amber-700 dark:bg-amber-900/50 dark:text-amber-200 sm:text-xs">ข้าม</span>`
+                      : isCurrent
+                        ? `<span id="active-step-list-timer" class="rounded-md bg-blue-100 px-2 py-0.5 font-mono text-[10px] text-blue-700 dark:bg-blue-900/50 dark:text-blue-200 sm:text-xs">${formatElapsed(calculateCurrentStepElapsed())}</span>`
+                        : ""
+                }
+                <span class="rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-xs ${
+                  isCurrent ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-200" : isCompleted ? "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-200" : isSkipped ? "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-200" : "bg-slate-100 text-slate-400 dark:bg-slate-800"
+                }">
+                  ${isCurrent ? "กำลังทำ" : isCompleted ? "เสร็จ" : isSkipped ? "ข้ามแล้ว" : "รอ"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </li>
+      `;
+    }
+
+    function renderStepList() {
+      return `
+        <section class="mobile-card rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+          <h2 class="text-base font-semibold text-slate-900 dark:text-white sm:text-xl">รายการขั้นตอนทั้งหมด</h2>
+          <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400 sm:text-sm">ระบบจะบันทึกเวลาของแต่ละขั้นตอนโดยอัตโนมัติ</p>
+          <ol class="mt-3.5 list-none sm:mt-5">
+            ${state.steps.map((step, idx) => renderStepItem(step, idx)).join("")}
+          </ol>
+        </section>
+      `;
+    }
+
+    function renderWorkflowPage() {
+      return `
+        <main class="mx-auto w-full max-w-4xl px-3 py-3 sm:px-6 sm:py-8">
+          <section class="mb-3 sm:mb-5">
+            <p class="text-xs font-medium text-blue-600 dark:text-blue-400">WORKFLOW</p>
+            <h1 class="mt-0.5 text-lg font-semibold text-slate-900 dark:text-white sm:text-2xl">ติดตามขั้นตอนการรับบริการ</h1>
+          </section>
+
+          <div class="space-y-3 sm:space-y-5">
+            ${renderProgressHeader()}
+            ${renderTimerCards()}
+            ${renderActionButtons()}
+            ${renderStepList()}
+          </div>
+        </main>
+      `;
+    }
+
+    function renderSummaryPage() {
+      const total = state.steps.reduce((sum, step) => sum + (Number(step.durationSeconds) || 0), 0);
+
+      return `
+        <main class="mx-auto w-full max-w-4xl px-3 py-4 sm:px-6 sm:py-10">
+          <section class="rounded-2xl border border-green-200 bg-green-50 p-4 text-center dark:border-green-900 dark:bg-green-950/30 sm:rounded-3xl sm:p-8">
+            <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-600 text-2xl text-white sm:h-20 sm:w-20 sm:text-4xl">✓</div>
+            <h1 class="mt-2 text-xl font-semibold text-green-900 dark:text-green-100 sm:mt-4 sm:text-3xl">ดำเนินการเสร็จสิ้น</h1>
+            <p class="mt-1 break-words text-xs text-green-700 dark:text-green-300 sm:text-base">${escapeHtml(state.sessionName)}</p>
+            <p class="mt-0.5 text-xs text-green-600 dark:text-green-400">(${SERVICE_TEMPLATES[state.serviceType]?.name || "โรงพยาบาล / ศูนย์บริการสาธารณสุข"})</p>
+          </section>
+
+          <section class="mt-3 grid grid-cols-3 gap-1.5 sm:mt-6 sm:gap-4">
+            <div class="rounded-xl border border-slate-200 bg-white p-2 text-center dark:border-slate-800 dark:bg-slate-900 sm:rounded-2xl sm:p-5">
+              <p class="text-[10px] text-slate-500 sm:text-sm">เวลาเริ่ม</p>
+              <p class="mt-1 text-xs font-semibold sm:text-xl">${formatTime(state.startTime)}</p>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-white p-2 text-center dark:border-slate-800 dark:bg-slate-900 sm:rounded-2xl sm:p-5">
+              <p class="text-[10px] text-slate-500 sm:text-sm">เวลาสิ้นสุด</p>
+              <p class="mt-1 text-xs font-semibold sm:text-xl">${formatTime(state.endTime)}</p>
+            </div>
+            <div class="rounded-xl border border-blue-200 bg-blue-50 p-2 text-center dark:border-blue-900 dark:bg-blue-950/30 sm:rounded-2xl sm:p-5">
+              <p class="text-[10px] text-blue-600 sm:text-sm">เวลารวม</p>
+              <p class="timer-number mt-1 text-xs font-semibold text-blue-700 dark:text-blue-300 sm:text-xl">${formatElapsed(total)}</p>
+            </div>
+          </section>
+
+          <section class="mt-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:mt-6 sm:p-5">
+            <h2 class="text-base font-semibold sm:text-xl">สรุปเวลาแต่ละขั้นตอน</h2>
+            <div class="mt-3 divide-y divide-slate-100 dark:divide-slate-800">
+              ${state.steps.map(step => `
+                <div class="flex items-center justify-between py-2.5 sm:py-4">
+                  <div class="min-w-0 pr-2">
+                    <p class="text-[10px] text-slate-500 sm:text-xs">ขั้นตอนที่ ${step.stepNumber}</p>
+                    <p class="truncate text-xs font-medium sm:text-base">${escapeHtml(step.title)}</p>
+                  </div>
+                  <span class="shrink-0 rounded-lg bg-slate-100 px-2 py-1 font-mono text-xs dark:bg-slate-800 sm:px-3 sm:py-2 sm:text-sm">
+                    ${step.status === 'skipped' ? 'ข้ามขั้นตอน' : formatElapsed(step.durationSeconds)}
+                  </span>
+                </div>
+              `).join("")}
+            </div>
+          </section>
+
+          <div class="mt-4 grid grid-cols-2 gap-2 sm:mt-6 sm:gap-3">
+            <button type="button" onclick="goHistory()" class="mobile-button rounded-xl border border-slate-300 bg-white px-4 py-3 text-xs font-semibold dark:border-slate-700 dark:bg-slate-900 sm:rounded-2xl sm:text-base">📋 ดูประวัติ</button>
+            <button type="button" onclick="resetApp()" class="mobile-button rounded-xl bg-blue-600 px-4 py-3 text-xs font-semibold text-white sm:rounded-2xl sm:text-base">🔄 เริ่มรายการใหม่</button>
+          </div>
+        </main>
+      `;
+    }
+
+    function renderHistoryPage() {
+      const history = getHistory();
+
+      return `
+        <main class="mx-auto w-full max-w-4xl px-3 py-4 sm:px-6 sm:py-10">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 class="text-xl font-semibold sm:text-3xl">ประวัติการรับบริการ</h1>
+              <p class="mt-0.5 text-xs text-slate-500 sm:text-sm">ข้อมูลถูกจัดเก็บไว้ใน Browser เครื่องนี้เท่านั้น</p>
+            </div>
+            <div class="flex items-center gap-2">
+             
+              ${history.length > 0 ? `<button type="button" onclick="clearHistory()" class="rounded-xl bg-red-600 px-3 py-2 text-xs font-medium text-white sm:px-4 sm:py-2.5 sm:text-sm">ล้างทั้งหมด</button>` : ""}
+            </div>
+          </div>
+
+          ${
+            history.length === 0
+              ? `
+                <section class="mt-4 rounded-2xl border border-dashed border-slate-300 p-6 text-center dark:border-slate-700 sm:mt-8 sm:p-12">
+                  <div class="text-4xl sm:text-5xl">📋</div>
+                  <h2 class="mt-3 text-base font-semibold sm:text-xl">ยังไม่มีประวัติ</h2>
+                  <p class="mt-1 text-xs text-slate-500 sm:text-sm">เมื่อทำรายการครบทุกขั้นตอน ประวัติจะแสดงที่นี่</p>
+                </section>
+              `
+              : `
+                <section class="mt-4 space-y-2.5 sm:mt-6 sm:space-y-4">
+                  ${history.map(item => `
+                    <article class="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+                      <div class="flex flex-col gap-2">
+                        <div class="min-w-0">
+                          <span class="inline-block rounded bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                            ${item.serviceTypeName || SERVICE_TEMPLATES[item.serviceType]?.name || "โรงพยาบาล / ศูนย์บริการสาธารณสุข"}
+                          </span>
+                          <h2 class="mt-1 break-words text-sm font-semibold sm:text-lg">${escapeHtml(item.name)}</h2>
+                          <p class="mt-0.5 break-words text-xs text-slate-500 sm:text-sm">${formatDateTime(item.startTime)} → ${formatDateTime(item.endTime)}</p>
+                        </div>
+                        <div class="flex items-center justify-between gap-2 pt-1">
+                          <span class="rounded-lg bg-blue-50 px-2.5 py-1 font-mono text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 sm:text-sm">
+                            ${formatElapsed(item.totalSeconds)}
+                          </span>
+                          <button type="button" onclick="deleteHistory('${item.id}')" class="rounded-lg bg-red-50 px-3 py-1 text-xs text-red-600 dark:bg-red-950/30 dark:text-red-300">ลบ</button>
+                        </div>
+                      </div>
+                    </article>
+                  `).join("")}
+                </section>
+              `
+          }
+        </main>
+      `;
+    }
+
+    function render() {
+      const app = document.getElementById("app");
+      if (!app) return;
+
+      updateTimers();
+
+      let content = "";
+      if (state.page === "home") {
+        content = renderHomePage();
+      } else if (state.page === "workflow") {
+        content = renderWorkflowPage();
+      } else if (state.page === "summary") {
+        content = renderSummaryPage();
+      } else if (state.page === "history") {
+        content = renderHistoryPage();
+      } else {
+        state.page = "home";
+        content = renderHomePage();
+      }
+
+      app.innerHTML = `
+        ${renderHeader()}
+        ${content}
+        <footer class="border-t border-slate-200 px-4 py-4 text-center safe-bottom dark:border-slate-800">
+          <p class="text-[11px] text-slate-500 dark:text-slate-400">
+            FlowGo · ระบบติดตามคิวและลำดับการรับบริการอัจฉริยะ · Local Storage
+          </p>
+        </footer>
+      `;
+
+      if (state.page === "home" && !state.started) {
+        onServiceTypeChange();
+      }
+    }
+
+    function updateTimersInDOM() {
+      state.currentTime = new Date();
+      updateTimers();
+
+      const clockTimeEl = document.getElementById("live-clock-time");
+      if (clockTimeEl) {
+        clockTimeEl.textContent = formatTime(state.currentTime);
+      }
+
+      if (state.page === "workflow" && state.started && !state.completed) {
+        const totalTimerEl = document.getElementById("total-elapsed-timer");
+        const currentStepTimerEl = document.getElementById("current-step-timer");
+        const countdownTimerEl = document.getElementById("countdown-timer");
+        const stepListTimerEl = document.getElementById("active-step-list-timer");
+
+        const currentStepElapsed = calculateCurrentStepElapsed();
+        const currentStepRemaining = calculateCurrentStepRemaining();
+        const currentStepObj = getCurrentStep();
+
+        // แจ้งเตือนเมื่อเหลือค่าน้อยกว่าหรือเท่ากับ 30 นาที (1800 วินาที)
+        if (currentStepRemaining <= 1800 && currentStepRemaining > 0 && currentStepObj && !currentStepObj.notified30Min) {
+          sendSystemNotification(
+            `⏱️ FlowGo แจ้งเตือนเวลา!`,
+            `ขั้นตอน "${currentStepObj.title}" เหลือเวลาน้อยกว่า 30 นาทีแล้ว`
+          );
+          currentStepObj.notified30Min = true;
+        }
+
+        if (totalTimerEl) totalTimerEl.textContent = formatElapsed(state.elapsedSeconds);
+        if (currentStepTimerEl) currentStepTimerEl.textContent = formatElapsed(currentStepElapsed);
+        
+        if (countdownTimerEl) {
+          countdownTimerEl.textContent = formatElapsed(currentStepRemaining);
+          if (currentStepRemaining < 0) {
+            countdownTimerEl.className = "timer-number mt-0.5 text-xs font-semibold text-red-600 dark:text-red-400 animate-pulse xs:text-sm sm:mt-2 sm:text-2xl";
+          } else {
+            countdownTimerEl.className = "timer-number mt-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400 xs:text-sm sm:mt-2 sm:text-2xl";
+          }
+        }
+
+        if (stepListTimerEl) stepListTimerEl.textContent = formatElapsed(currentStepElapsed);
+
+        saveState();
+      }
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden" && state.started && !state.completed) {
+        const step = getCurrentStep();
+        const remaining = calculateCurrentStepRemaining();
+        if (step) {
+          sendSystemNotification(
+            `⏱️ FlowGo กำลังรันพื้นหลัง`,
+            `ขั้นตอนปัจจุบัน: ${step.title} (เวลาคงเหลือ ${formatElapsed(remaining)})`
+          );
+        }
+      }
+    });
+
+    setInterval(updateTimersInDOM, 1000);
+
+    document.addEventListener("keydown", event => {
+      if (state.page !== "workflow") return;
+
+      if (event.key === "Enter" && !event.target.matches("input, textarea, select, button")) {
+        nextStep();
+      }
+    });
+
+    loadTheme();
+    loadNotifSetting();
+    loadState();   
+    render();
+  </script>
+</body>
+</html>
